@@ -1,9 +1,11 @@
 import os
 import logging
+import asyncio
 from io import BytesIO
 from PIL import Image
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram.error import Conflict
 
 # ============================================
 # CONFIGURATION
@@ -32,8 +34,7 @@ SUPPORTED_FORMATS = {
     "gif": "GIF",
     "bmp": "BMP",
     "tiff": "TIFF",
-    "ico": "ICO",
-    "pdf": "PDF"
+    "ico": "ICO"
 }
 
 # ============================================
@@ -64,14 +65,6 @@ def convert_image(image_bytes: bytes, target_format: str) -> BytesIO:
         # Handle RGBA to RGB conversion for JPEG
         if target_format.lower() in ["jpg", "jpeg"] and img.mode in ("RGBA", "P"):
             img = img.convert("RGB")
-
-        # Handle PDF conversion
-        if target_format.lower() == "pdf":
-            # Save as PDF
-            output = BytesIO()
-            img.save(output, format="PDF", resolution=100.0)
-            output.seek(0)
-            return output
 
         # Save to bytes
         output = BytesIO()
@@ -146,12 +139,10 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     try:
         # Get image file
         if update.message.photo:
-            # Photo sent as photo
             photo = update.message.photo[-1]
             file = await photo.get_file()
             original_format = "jpg"
         elif update.message.document:
-            # File sent as document
             doc = update.message.document
             if doc.mime_type and doc.mime_type.startswith("image/"):
                 file = await doc.get_file()
@@ -227,21 +218,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             # Get original format
             original_format = context.user_data.get("original_format", "image")
 
-            # Determine file type for sending
-            if target_format.lower() == "pdf":
-                # Send as document for PDF
-                await query.message.reply_document(
-                    document=converted,
-                    filename=f"converted.{target_format}",
-                    caption=f"✅ Converted from {original_format.upper()} to {target_format.upper()}"
-                )
-            else:
-                # Send as document for images
-                await query.message.reply_document(
-                    document=converted,
-                    filename=f"converted.{target_format}",
-                    caption=f"✅ Converted from {original_format.upper()} to {target_format.upper()}"
-                )
+            # Send converted image
+            await query.message.reply_document(
+                document=converted,
+                filename=f"converted.{target_format}",
+                caption=f"✅ Converted from {original_format.upper()} to {target_format.upper()}"
+            )
 
             # Delete processing message
             await query.message.delete()
@@ -274,8 +256,8 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 # MAIN APPLICATION
 # ============================================
 
-def main() -> None:
-    """Start the bot"""
+async def main() -> None:
+    """Start the bot with proper webhook handling"""
     try:
         # Create application
         application = Application.builder().token(TOKEN).build()
@@ -297,16 +279,32 @@ def main() -> None:
         # Add error handler
         application.add_error_handler(error_handler)
 
+        # === FIX: Clear webhook before starting ===
+        logger.info("🔄 Clearing any existing webhook...")
+        await application.bot.delete_webhook(drop_pending_updates=True)
+        logger.info("✅ Webhook cleared successfully!")
+
         # Start the bot
         logger.info(f"🚀 Starting {BOT_NAME} (@{BOT_USERNAME})...")
         logger.info(f"✅ Bot is running on Python {os.sys.version}")
 
-        # Start polling
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
+        # Start polling with proper settings
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling()
 
+        # Keep the bot running
+        while True:
+            await asyncio.sleep(1)
+
+    except Conflict as e:
+        logger.error(f"❌ Conflict error: {e}")
+        logger.error("⚠️ Another instance of this bot is already running!")
+        logger.error("💡 Make sure you don't have multiple deployments with the same token.")
+        raise
     except Exception as e:
-        logger.error(f"Failed to start bot: {e}")
+        logger.error(f"❌ Failed to start bot: {e}")
         raise
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
