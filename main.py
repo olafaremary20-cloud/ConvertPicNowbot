@@ -279,7 +279,7 @@ async def main() -> None:
         # Add error handler
         application.add_error_handler(error_handler)
 
-        # === FIX: Clear webhook before starting ===
+        # Clear webhook before starting
         logger.info("🔄 Clearing any existing webhook...")
         await application.bot.delete_webhook(drop_pending_updates=True)
         logger.info("✅ Webhook cleared successfully!")
